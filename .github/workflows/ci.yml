@@ -1,0 +1,129 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  branch-name:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Conventional Branch
+        # Through the environment, never interpolated into the script: a branch name is user input.
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: .githooks/check-branch-name.sh "$BRANCH"
+
+  python:
+    runs-on: ubuntu-latest
+    services:
+      # The suite runs against a real Postgres, the same major as compose.yaml.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:55432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        # --locked fails if uv.lock is missing or stale for pyproject.toml.
+        run: uv sync --locked --extra dev
+      - name: Lint
+        run: uv run ruff check . && uv run ruff format --check .
+      - name: Type check
+        run: uv run mypy
+      - name: Test
+        # Includes the migrations: every revision is applied, downgraded to nothing, and applied again.
+        run: uv run pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: python
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # A pull request builds the image and stops there. Pushes to main and release tags publish one.
+      PUBLISH: ${{ github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches the package version
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          code=$(grep -m1 '^__version__ = ' src/vexoulz_auth/__init__.py | cut -d'"' -f2)
+          project=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          echo "tag $TAG, __version__ $code, pyproject $project"
+          [ "$TAG" = "v$code" ] && [ "$TAG" = "v$project" ]
+      - uses: docker/setup-buildx-action@v3
+      - name: Image name
+        # GHCR rejects an uppercase path, and an owner's login may well have one.
+        id: image
+        run: echo "repo=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - name: Compose file is valid
+        run: cp .env.example .env && AUTH_DB_PASSWORD=x docker compose config --quiet
+      - name: Image starts and answers
+        # The image as built, a fresh Postgres, the migrate step, then /healthz.
+        run: |
+          docker build -t vexoulz-auth:ci .
+          docker network create ci
+          docker run -d --network ci --name pg -e POSTGRES_PASSWORD=pg postgres:17-alpine
+          for i in $(seq 30); do docker exec pg pg_isready -U postgres && break; sleep 1; done
+          key=$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())')
+          set -- -e AUTH_DATABASE_URL=postgresql://postgres:pg@pg:5432/postgres -e AUTH_TOKEN_KEY="$key"
+          docker run --rm --network ci "$@" vexoulz-auth:ci db upgrade
+          docker run -d --network ci --name auth -p 8090:8090 "$@" vexoulz-auth:ci
+          for i in $(seq 30); do curl -fsS http://127.0.0.1:8090/healthz && exit 0; sleep 1; done
+          docker logs auth
+          exit 1
+      - name: Log in to GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image tags
+        # :main is what production follows; a release adds :vX.Y.Z to roll back to, and the sha tag is
+        # there for everything else.
+        id: tags
+        env:
+          REPO: ${{ steps.image.outputs.repo }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          case "$REF_TYPE/$REF_NAME" in
+            tag/v*) name=$REF_NAME ;;
+            *) name=main ;;
+          esac
+          {
+            echo 'list<<EOF'
+            echo "$REPO:$name"
+            echo "$REPO:$GITHUB_SHA"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ env.PUBLISH == 'true' }}
+          platforms: linux/amd64
+          tags: ${{ steps.tags.outputs.list }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
