@@ -1,0 +1,38 @@
+# The service, its database and the migrate step, for running it anywhere. Settings come from .env
+# (see .env.example); AUTH_DATABASE_URL there should point at the `db` service below.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: vexoulz_auth
+      POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD:?set AUTH_DB_PASSWORD}
+      POSTGRES_DB: vexoulz_auth
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vexoulz_auth"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Migrations are their own step: it runs to completion before the service starts.
+  migrate:
+    image: ${AUTH_IMAGE:-ghcr.io/vexoulz/vexoulz-auth:main}
+    command: ["db", "upgrade"]
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  auth:
+    image: ${AUTH_IMAGE:-ghcr.io/vexoulz/vexoulz-auth:main}
+    env_file: .env
+    ports:
+      - "127.0.0.1:8090:8090"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  db:
