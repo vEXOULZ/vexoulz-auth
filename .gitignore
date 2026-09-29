@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+.coverage
+
+# Local, host-specific files never belong in this repo (private hosting lives in homelab-docs)
+.env
+.env.*
+!.env.example
+*.local.*
+/deploy.local/
+/secrets/
