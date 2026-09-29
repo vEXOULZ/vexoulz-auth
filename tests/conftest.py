@@ -32,9 +32,11 @@ CLIENTS = (
 )
 
 
-def pytest_asyncio_loop_factories(config: pytest.Config, item: pytest.Item) -> dict[str, object] | None:
-    # psycopg's async driver can't use Windows' proactor loop.
-    return {"selector": asyncio.SelectorEventLoop} if sys.platform == "win32" else None
+if sys.platform == "win32":
+
+    def pytest_asyncio_loop_factories(config: pytest.Config, item: pytest.Item) -> dict[str, object]:
+        # psycopg's async driver can't use Windows' proactor loop.
+        return {"selector": asyncio.SelectorEventLoop}
 
 
 @pytest.fixture(scope="session")
