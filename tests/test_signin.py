@@ -24,9 +24,7 @@ def query(resp: httpx.Response) -> dict[str, str]:
     return {k: v[0] for k, v in parse_qs(urlsplit(resp.headers["location"]).query).items()}
 
 
-async def authorize(
-    h: Harness, client: str, redirect: str, scope: str = "", state: str = "st-1"
-) -> httpx.Response:
+async def authorize(h: Harness, client: str, redirect: str, scope: str = "", state: str = "st-1") -> httpx.Response:
     params = {"client_id": client, "redirect_uri": redirect, "state": state, "scope": scope}
     return await h.http.get("/authorize", params=params)
 
@@ -117,9 +115,9 @@ async def test_sessions_expire(h: Harness) -> None:
 
 async def test_signing_in_again_ends_the_previous_session(h: Harness) -> None:
     await h.sign_in()
-    sid = (
-        await h.http.post("/v1/token", headers=VODS, json=await code_for(h, "vods-admin", VODS_REDIRECT))
-    ).json()["sid"]
+    sid = (await h.http.post("/v1/token", headers=VODS, json=await code_for(h, "vods-admin", VODS_REDIRECT))).json()[
+        "sid"
+    ]
     await h.sign_in(BOB)
     assert (await h.me()).json()["login"] == "bob"
     assert (await h.http.get(f"/v1/sessions/{sid}", headers=VODS)).status_code == 404
@@ -138,9 +136,9 @@ async def test_sign_out_needs_the_csrf_token(h: Harness) -> None:
 
 async def test_sign_out_everywhere_reaches_other_browsers_and_the_backends(h: Harness) -> None:
     await h.sign_in()
-    sid = (
-        await h.http.post("/v1/token", headers=VODS, json=await code_for(h, "vods-admin", VODS_REDIRECT))
-    ).json()["sid"]
+    sid = (await h.http.post("/v1/token", headers=VODS, json=await code_for(h, "vods-admin", VODS_REDIRECT))).json()[
+        "sid"
+    ]
     phone = h.another_browser()
     await phone.sign_in()
     assert (await h.http.get(f"/v1/sessions/{sid}", headers=VODS)).json()["active"] is True
@@ -170,9 +168,7 @@ async def test_a_signed_in_user_gets_a_code_without_twitch(h: Harness) -> None:
     q = query(await authorize(h, "vods-admin", VODS_REDIRECT, state="abc"))
     assert q["state"] == "abc" and q["code"]
     assert len(h.twitch.calls) == calls
-    resp = await h.http.post(
-        "/v1/token", headers=VODS, json={"code": q["code"], "redirect_uri": VODS_REDIRECT}
-    )
+    resp = await h.http.post("/v1/token", headers=VODS, json={"code": q["code"], "redirect_uri": VODS_REDIRECT})
     assert resp.status_code == 200
     body = resp.json()
     assert body["user"]["login"] == "alice" and body["sid"] and body["expiresAt"]
@@ -236,9 +232,7 @@ async def test_backends_must_authenticate(h: Harness) -> None:
     await h.sign_in()
     body = await code_for(h, "vods-admin", VODS_REDIRECT)
     assert (await h.http.post("/v1/token", json=body)).status_code == 401
-    assert (
-        await h.http.post("/v1/token", headers=basic("vods-admin", "wrong"), json=body)
-    ).status_code == 401
+    assert (await h.http.post("/v1/token", headers=basic("vods-admin", "wrong"), json=body)).status_code == 401
     assert (await h.http.get("/v1/sessions/x", headers=basic("dtp", "nope"))).status_code == 401
 
 
@@ -291,9 +285,7 @@ async def test_a_plain_sign_in_keeps_the_scoped_token(h: Harness) -> None:
     uid = await dtp_sign_in(h)
     await h.sign_in()  # identity only: must not replace the token that can list moderated channels
     h.twitch.moderated[uid] = ["7"]
-    assert (await h.http.get(f"/v1/users/{uid}/moderated-channels", headers=DTP)).json() == {
-        "channels": ["7"]
-    }
+    assert (await h.http.get(f"/v1/users/{uid}/moderated-channels", headers=DTP)).json() == {"channels": ["7"]}
 
 
 # ── small pieces ─────────────────────────────────────────────────────────────

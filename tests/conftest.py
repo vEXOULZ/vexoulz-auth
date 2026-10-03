@@ -6,6 +6,7 @@ import sys
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -168,8 +169,8 @@ class Harness:
         return await self.http.get("/v1/me", headers={"Origin": SITE})
 
 
-def make_settings(**kw: object) -> Settings:
-    base: dict[str, object] = {
+def make_settings(**kw: Any) -> Settings:
+    base: dict[str, Any] = {
         "public_url": "http://auth.test",
         "twitch_client_id": "twitch-app",
         "token_key": Fernet.generate_key().decode(),

@@ -13,9 +13,7 @@ async def headers(h: Harness) -> dict[str, str]:
 async def test_put_get_list_delete(h: Harness) -> None:
     await h.sign_in()
     hd = await headers(h)
-    resp = await h.http.put(
-        "/v1/progress/v1", headers=hd, json={"t": 120.5, "duration": 3600, "updatedAt": 1000}
-    )
+    resp = await h.http.put("/v1/progress/v1", headers=hd, json={"t": 120.5, "duration": 3600, "updatedAt": 1000})
     assert resp.json() == {"vodId": "v1", "t": 120.5, "duration": 3600, "updatedAt": 1000}
     await h.http.put("/v1/progress/v2", headers=hd, json={"t": 5, "duration": 60, "updatedAt": 2000})
     assert (await h.http.get("/v1/progress/v1")).json()["t"] == 120.5
@@ -30,9 +28,7 @@ async def test_newest_wins(h: Harness) -> None:
     await h.sign_in()
     hd = await headers(h)
     await h.http.put("/v1/progress/v1", headers=hd, json={"t": 500, "duration": 900, "updatedAt": 2000})
-    stale = await h.http.put(
-        "/v1/progress/v1", headers=hd, json={"t": 10, "duration": 900, "updatedAt": 1000}
-    )
+    stale = await h.http.put("/v1/progress/v1", headers=hd, json={"t": 10, "duration": 900, "updatedAt": 1000})
     assert stale.json()["t"] == 500
 
 

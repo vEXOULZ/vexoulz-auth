@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "One Twitch sign-in for every vexoulz site, and the per-user data behind it (watch progress)"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
@@ -36,15 +36,14 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 
-[tool.ruff]
-line-length = 110
-target-version = "py312"
+[tool.uv]
+required-version = ">=0.5"
 
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+[tool.ruff]
+extend = ".conventions/ruff.toml"
 
 [tool.mypy]
-files = ["src"]
-python_version = "3.12"
+files = ["src", "tests"]
+python_version = "3.13"
 strict = true
 ignore_missing_imports = true

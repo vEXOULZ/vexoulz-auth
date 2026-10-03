@@ -154,9 +154,7 @@ def create_app(
     clients = settings.client_map  # parse now: a bad registration fails at start, not at first sign-in
     owns_engine, owns_twitch = engine is None, twitch is None
     db = engine or create_async_engine(settings.sqlalchemy_url, pool_pre_ping=True)
-    tw: TwitchHttp = twitch or TwitchClient(
-        settings.twitch_client_id, settings.twitch_client_secret.get_secret_value()
-    )
+    tw: TwitchHttp = twitch or TwitchClient(settings.twitch_client_id, settings.twitch_client_secret.get_secret_value())
     secure = settings.cookie_secure
     # __Host- makes the browser insist on Secure, path=/ and no Domain: the cookie can't leak to or be
     # planted from a sibling host. Plain http in development can't have it.
@@ -251,9 +249,7 @@ def create_app(
             return None
         return client
 
-    async def has_signed_into(
-        conn: AsyncConnection, client: Client, *, sid: str = "", user_id: str = ""
-    ) -> bool:
+    async def has_signed_into(conn: AsyncConnection, client: Client, *, sid: str = "", user_id: str = "") -> bool:
         """Whether the client was ever handed this session or user: a backend only asks about its own."""
         where = codes.c.session_id == sid if sid else codes.c.user_id == user_id
         found = await conn.scalar(
@@ -417,9 +413,7 @@ def create_app(
             return RedirectResponse(with_query(redirect_uri, error="invalid_request"), status_code=302)
         requested = set(q.get("scope", "").split())
         if not requested <= client.scopes:
-            return RedirectResponse(
-                with_query(redirect_uri, error="invalid_scope", state=state), status_code=302
-            )
+            return RedirectResponse(with_query(redirect_uri, error="invalid_scope", state=state), status_code=302)
         if not login_limit.allow(ip_of(request)):
             return PlainTextResponse("Too many sign-in attempts. Wait a minute.", status_code=429)
         async with db.begin() as conn:
@@ -445,9 +439,7 @@ def create_app(
         async with db.begin() as conn:
             row = (
                 await conn.execute(
-                    delete(login_states)
-                    .where(login_states.c.state_hash == _hash(state))
-                    .returning(login_states)
+                    delete(login_states).where(login_states.c.state_hash == _hash(state)).returning(login_states)
                 )
             ).first()
         if row is None:
@@ -488,9 +480,7 @@ def create_app(
             if old := await current_session(conn, request):  # this browser's previous sign-in ends here
                 await conn.execute(update(sessions).where(sessions.c.id == old.id).values(revoked_at=clock()))
             sess, cookie = await new_session(conn, profile.id)
-            await record(
-                conn, "signin", request, user_id=profile.id, client_id=row.client_id, login=profile.login
-            )
+            await record(conn, "signin", request, user_id=profile.id, client_id=row.client_id, login=profile.login)
             if client and row.client_redirect_uri:
                 code_out = await issue_code(conn, client, row.client_redirect_uri, sess)
                 url = with_query(row.client_redirect_uri, code=code_out, state=row.client_state or "")
@@ -565,17 +555,12 @@ def create_app(
             .limit(PROGRESS_MAX)
         )
         await conn.execute(
-            delete(progress).where(
-                progress.c.user_id == user_id, progress.c.vod_id.not_in(keep.scalar_subquery())
-            )
+            delete(progress).where(progress.c.user_id == user_id, progress.c.vod_id.not_in(keep.scalar_subquery()))
         )
 
     async def progress_list(conn: AsyncConnection, user_id: str, limit: int) -> list[dict[str, Any]]:
         rows = await conn.execute(
-            select(progress)
-            .where(progress.c.user_id == user_id)
-            .order_by(progress.c.updated_at.desc())
-            .limit(limit)
+            select(progress).where(progress.c.user_id == user_id).order_by(progress.c.updated_at.desc()).limit(limit)
         )
         return [_progress_json(r) for r in rows]
 
@@ -643,9 +628,7 @@ def create_app(
             sess = await session_for_write(conn, request)
             if isinstance(sess, Response):
                 return sess
-            await conn.execute(
-                delete(progress).where(progress.c.user_id == sess.user_id, progress.c.vod_id == vod_id)
-            )
+            await conn.execute(delete(progress).where(progress.c.user_id == sess.user_id, progress.c.vod_id == vod_id))
         return Response(status_code=204)
 
     # ── backends ───────────────────────────────────────────────────────────────
@@ -710,16 +693,12 @@ def create_app(
                 await conn.execute(
                     select(users, sessions.c.expires_at)
                     .join(sessions, sessions.c.user_id == users.c.id)
-                    .where(
-                        sessions.c.id == sid, sessions.c.revoked_at.is_(None), sessions.c.expires_at > clock()
-                    )
+                    .where(sessions.c.id == sid, sessions.c.revoked_at.is_(None), sessions.c.expires_at > clock())
                 )
             ).first()
         if found is None:
             return JSONResponse({"active": False}, status_code=404)
-        return JSONResponse(
-            {"active": True, "user": _user_json(found), "expiresAt": found.expires_at.isoformat()}
-        )
+        return JSONResponse({"active": True, "user": _user_json(found), "expiresAt": found.expires_at.isoformat()})
 
     @app.get("/v1/users/{user_id}/moderated-channels")
     async def moderated_channels(user_id: str, request: Request) -> Response:
@@ -733,9 +712,7 @@ def create_app(
         async with db.connect() as conn:
             if not await has_signed_into(conn, client, user_id=user_id):
                 return _error(404, "unknown_user")
-            row = (
-                await conn.execute(select(twitch_tokens).where(twitch_tokens.c.user_id == user_id))
-            ).first()
+            row = (await conn.execute(select(twitch_tokens).where(twitch_tokens.c.user_id == user_id))).first()
         if row is None or MODERATED_SCOPE not in row.scopes:
             return _error(409, "scope_missing")
         try:

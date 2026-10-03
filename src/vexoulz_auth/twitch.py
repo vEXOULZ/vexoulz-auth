@@ -76,9 +76,7 @@ class TwitchClient:
         return Token(body["access_token"], body.get("refresh_token"), frozenset(body.get("scope") or ()))
 
     async def exchange_code(self, code: str, redirect_uri: str) -> Token:
-        return await self._token(
-            {"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri}
-        )
+        return await self._token({"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri})
 
     async def refresh(self, refresh_token: str) -> Token:
         return await self._token({"grant_type": "refresh_token", "refresh_token": refresh_token})
