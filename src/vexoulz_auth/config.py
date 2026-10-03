@@ -77,11 +77,7 @@ class Settings(BaseSettings):
 
     @cached_property
     def client_map(self) -> dict[str, Client]:
-        raw = (
-            self.clients_file.read_text(encoding="utf-8")
-            if self.clients_file
-            else self.clients.get_secret_value()
-        )
+        raw = self.clients_file.read_text(encoding="utf-8") if self.clients_file else self.clients.get_secret_value()
         out: dict[str, Client] = {}
         for entry in json.loads(raw or "[]"):
             scopes = frozenset(entry.get("scopes") or ())
