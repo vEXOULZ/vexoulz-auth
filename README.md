@@ -38,8 +38,10 @@ Writes need the `X-Vexoulz-CSRF` header with the `csrf` from `/v1/me`.
 
 ## Running it
 
-Copy `.env.example` to `.env` and fill it in (a Twitch application whose redirect URL is
-`<AUTH_PUBLIC_URL>/callback`), then:
+Copy `.env.example` to `.env` and `secrets.example/` to `secrets/`, and fill both in (a Twitch application
+whose redirect URL is `<AUTH_PUBLIC_URL>/callback`). With compose, the secrets reach the containers as files
+in `/run/secrets`; `secrets.example/README.md` lists them and the owner each needs. Without compose, set them
+as variables in `.env` instead (`AUTH_TOKEN_KEY` and so on), or point `AUTH_SECRETS_DIR` at the directory:
 
 ```sh
 uv sync --extra dev
