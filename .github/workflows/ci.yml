@@ -28,7 +28,7 @@ jobs:
       # The compose file is valid, and the image as built starts against a fresh Postgres, runs the
       # migrate step and answers /healthz.
       pre-build: |
-        cp .env.example .env && AUTH_DB_PASSWORD=x docker compose config --quiet
+        cp .env.example .env && cp -r secrets.example secrets && docker compose config --quiet
         docker build -t vexoulz-auth:ci .
         docker network create ci
         docker run -d --network ci --name pg -e POSTGRES_PASSWORD=pg postgres:17-alpine
