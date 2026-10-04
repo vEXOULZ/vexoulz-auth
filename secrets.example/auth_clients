@@ -1,0 +1,1 @@
+[{"id":"dtp","secret":"long-random-secret","redirect_uris":["https://bot.example.net/auth/admin/callback"],"scopes":["user:read:moderated_channels"]}]

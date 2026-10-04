@@ -1,8 +1,14 @@
-"""Settings, all from the environment (`AUTH_*`). `.env.example` lists them with placeholder values."""
+"""Settings, from the environment (`AUTH_*`) or from secrets files.
+
+`.env.example` lists the settings and `secrets.example/` the secrets, with placeholder values. A secret is a
+file named like its variable, lowercased (`auth_token_key`), in `/run/secrets` (where compose mounts them) or
+`AUTH_SECRETS_DIR`. A variable set in the environment wins over the file.
+"""
 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -44,8 +50,16 @@ def origin_of(url: str) -> str | None:
     return f"{parts.scheme}://{host}" + (f":{port}" if port else "")
 
 
+SECRETS_DIR = Path(os.environ.get("AUTH_SECRETS_DIR", "/run/secrets"))
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="AUTH_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="AUTH_",
+        env_file=".env",
+        extra="ignore",
+        secrets_dir=SECRETS_DIR if SECRETS_DIR.is_dir() else None,
+    )
 
     database_url: str = "postgresql://postgres:dev@127.0.0.1:55434/vexoulz_auth"
     # Where this service is reached from browsers. Twitch sends people back to `<public_url>/callback`,
