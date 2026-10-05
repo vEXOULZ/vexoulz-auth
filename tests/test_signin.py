@@ -4,9 +4,10 @@ import base64
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+from sqlalchemy.ext.asyncio import create_async_engine
 
-from tests.conftest import ALICE, BOB, BOT_REDIRECT, SITE, VODS_REDIRECT, Harness
-from vexoulz_auth.app import CSRF_HEADER, Limiter, with_query
+from tests.conftest import ALICE, BOB, BOT_REDIRECT, SITE, VODS_REDIRECT, Clock, FakeTwitch, Harness, make_settings
+from vexoulz_auth.app import CSRF_HEADER, Limiter, create_app, with_query
 
 MODERATED = "user:read:moderated_channels"
 
@@ -305,6 +306,19 @@ def test_limiter() -> None:
     assert lim.allow("a")
 
 
-async def test_healthz(h: Harness) -> None:
-    resp = await h.http.get("/healthz")
-    assert resp.status_code == 200 and resp.json()["ok"] is True
+async def test_healthz_and_readyz(h: Harness) -> None:
+    for path in ("/healthz", "/readyz"):
+        resp = await h.http.get(path)
+        assert resp.status_code == 200 and resp.json()["ok"] is True and resp.json()["version"]
+
+
+async def test_readyz_is_503_without_the_database() -> None:
+    """/healthz still answers: liveness doesn't look at the database."""
+    engine = create_async_engine("postgresql+psycopg://nobody:nothing@127.0.0.1:1/auth")
+    app = create_app(make_settings(), twitch=FakeTwitch(), engine=engine, clock=Clock())
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://auth.test") as http:
+        assert (await http.get("/healthz")).status_code == 200
+        resp = await http.get("/readyz")
+    await engine.dispose()
+    assert resp.status_code == 503
+    assert "database" in resp.text

@@ -32,7 +32,8 @@ one-time code, like any OAuth provider.
 | `GET /v1/progress[?limit=]` | sites | the user's progress, newest first |
 | `GET/PUT/DELETE /v1/progress/{vodId}` | sites | one entry; `PUT {t, duration, updatedAt}`, newest wins |
 | `POST /v1/progress/merge` | sites | `{items: [...]}`, newest wins per entry (a browser's local progress) |
-| `GET /healthz` | ops | database reachable |
+| `GET /healthz` | ops | the process answers (liveness; the container's `HEALTHCHECK`), no dependency checks |
+| `GET /readyz` | ops | the database answers too, else 503 naming it. Point uptime monitors here |
 
 Writes need the `X-Vexoulz-CSRF` header with the `csrf` from `/v1/me`.
 
