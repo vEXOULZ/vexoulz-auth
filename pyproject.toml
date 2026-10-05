@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "One Twitch sign-in for every vexoulz site, and the per-user data behind it (watch progress)"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.13"
+requires-python = ">=3.14.8"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
