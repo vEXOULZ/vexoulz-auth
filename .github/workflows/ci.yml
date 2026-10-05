@@ -8,19 +8,19 @@ on:
 
 jobs:
   conventions:
-    uses: vEXOULZ/conventions/.github/workflows/conventions-check.yml@v1.0.0
+    uses: vEXOULZ/conventions/.github/workflows/conventions-check.yml@v2.0.0
     secrets: inherit
 
   ci:
     # The suite runs against a real Postgres, the same major as compose.yaml, and includes the
     # migrations: every revision is applied, downgraded to nothing, and applied again.
-    uses: vEXOULZ/conventions/.github/workflows/python-ci.yml@v1.0.0
+    uses: vEXOULZ/conventions/.github/workflows/python-ci.yml@v2.0.0
     with:
       postgres: true
 
   image:
     needs: ci
-    uses: vEXOULZ/conventions/.github/workflows/publish-image.yml@v1.0.0
+    uses: vEXOULZ/conventions/.github/workflows/publish-image.yml@v2.0.0
     permissions:
       contents: read
       packages: write
