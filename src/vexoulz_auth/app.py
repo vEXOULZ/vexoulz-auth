@@ -18,6 +18,7 @@ credentialed fetches carry it; CORS lets only the configured site origins read t
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -56,6 +57,7 @@ from vexoulz_auth.twitch import (
 log = structlog.get_logger(__name__)
 
 CSRF_HEADER = "X-Vexoulz-CSRF"
+READY_TIMEOUT_S = 5  # /readyz: a database slower than this counts as down
 STATE_TTL = timedelta(minutes=10)
 CODE_TTL = timedelta(seconds=60)
 MODERATED_SCOPE = "user:read:moderated_channels"
@@ -384,8 +386,15 @@ def create_app(
 
     @app.get("/healthz")
     async def healthz() -> Response:
+        """Liveness: the process answers. No dependency checks, so a database outage doesn't get the
+        container restarted for nothing."""
+        return JSONResponse({"ok": True, "version": __version__})
+
+    @app.get("/readyz")
+    async def readyz() -> Response:
+        """Readiness: the database answers too, within READY_TIMEOUT_S, so a probe gets its 503 promptly."""
         try:
-            async with db.connect() as conn:
+            async with asyncio.timeout(READY_TIMEOUT_S), db.connect() as conn:
                 await conn.execute(text("select 1"))
         except Exception as exc:  # noqa: BLE001 - any failure means not healthy
             return _error(503, "database", detail=type(exc).__name__)
