@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6", "mypy>=1.11"]
+dev = ["pytest>=8", "pytest-asyncio>=1.4.0", "ruff>=0.6", "mypy>=1.11"]
 
 [project.scripts]
 vexoulz-auth = "vexoulz_auth.__main__:main"
