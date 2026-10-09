@@ -16,24 +16,23 @@ The session is a host-only cookie on this service's own host. Sites are same-sit
 credentialed fetches carry it; CORS lets only the configured site origins read the answers.
 """
 
-from __future__ import annotations
-
 import asyncio
 import base64
 import binascii
 import hashlib
 import secrets
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import structlog
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field, ValidationError
@@ -127,6 +126,49 @@ def _error(status: int, error: str, **extra: Any) -> JSONResponse:
     return JSONResponse({"error": error, **extra}, status_code=status)
 
 
+class Refused(Exception):
+    """Raised by a guard or a body parser; answered as `_error(status, error)`."""
+
+    def __init__(self, status: int, error: str) -> None:
+        super().__init__(error)
+        self.status, self.error = status, error
+
+
+def json_body[M: BaseModel](model: type[M], status: int, error: str) -> Callable[[Request], Awaitable[M]]:
+    """A dependency giving the request's body as `model`, or refusing it with `status` and `error`.
+
+    Not a plain body parameter: FastAPI validates those only after every dependency has run, and a bad
+    body is refused before the session guard looks at the request (so it never counts against a limit).
+    An endpoint declares it before its guard."""
+
+    async def parse(request: Request) -> M:
+        try:
+            return model.model_validate_json(await request.body())
+        except ValidationError:
+            raise Refused(status, error) from None
+
+    return parse
+
+
+progress_body = json_body(ProgressIn, 422, "invalid_progress")
+merge_body = json_body(ProgressMerge, 422, "invalid_progress")
+token_body = json_body(TokenIn, 400, "invalid_request")
+
+
+async def progress_item(vod_id: str, body: Annotated[ProgressIn, Depends(progress_body)]) -> ProgressItem:
+    try:
+        return ProgressItem(vodId=vod_id, **body.model_dump())
+    except ValidationError:
+        raise Refused(422, "invalid_progress") from None
+
+
+async def progress_limit(request: Request) -> int:
+    try:
+        return min(max(int(request.query_params.get("limit", PROGRESS_MAX)), 1), PROGRESS_MAX)
+    except ValueError:
+        raise Refused(400, "invalid_limit") from None
+
+
 def _user_json(row: Any) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -176,6 +218,15 @@ def create_app(
             await db.dispose()
 
     app = FastAPI(title="vexoulz-auth", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
+
+    @app.exception_handler(Refused)
+    async def refused(_: Request, exc: Refused) -> Response:
+        return _error(exc.status, exc.error)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid(_: Request, exc: RequestValidationError) -> Response:
+        return _error(422, "invalid_request")  # this service's error shape, not FastAPI's list of errors
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=sorted(settings.origins),
@@ -225,24 +276,6 @@ def create_app(
             )
         ).first()
         return Session(row.id, row.user_id, row.csrf, row.expires_at) if row else None
-
-    async def session_for_write(conn: AsyncConnection, request: Request) -> Session | JSONResponse:
-        """The session of a state-changing browser request, or the response refusing it."""
-        sess = await current_session(conn, request)
-        if sess is None:
-            return _error(401, "signed_out")
-        if not secrets.compare_digest(request.headers.get(CSRF_HEADER, ""), sess.csrf):
-            return _error(403, "csrf")
-        if not write_limit.allow(sess.user_id):
-            return _error(429, "rate_limited")
-        return sess
-
-    def backend_client(request: Request) -> Client | JSONResponse:
-        """The backend making this request, or the response refusing it (rate limited, or bad credentials)."""
-        if not backend_limit.allow(ip_of(request)):
-            return _error(429, "rate_limited")
-        client = authenticate_client(request)
-        return _error(401, "invalid_client") if client is None else client
 
     async def live_session_user(conn: AsyncConnection, sid: str, now: datetime) -> Row[Any] | None:
         """The user of session `sid` with its expiry, unless it was revoked or has expired."""
@@ -396,6 +429,62 @@ def create_app(
             samesite="lax",
         )
 
+    # ── dependencies ───────────────────────────────────────────────────────────
+    # A connection closes (its transaction commits, or rolls back on an exception) when the endpoint
+    # returns, before the response goes out. Guards raise Refused, answered by its handler.
+
+    async def reading() -> AsyncIterator[AsyncConnection]:
+        async with db.connect() as conn:
+            yield conn
+
+    async def writing() -> AsyncIterator[AsyncConnection]:
+        async with db.begin() as conn:
+            yield conn
+
+    ReadConn = Annotated[AsyncConnection, Depends(reading, scope="function")]  # noqa: N806
+    WriteConn = Annotated[AsyncConnection, Depends(writing, scope="function")]  # noqa: N806
+
+    def check_csrf(request: Request, sess: Session) -> None:
+        if not secrets.compare_digest(request.headers.get(CSRF_HEADER, ""), sess.csrf):
+            raise Refused(403, "csrf")
+
+    async def require_session(request: Request, conn: ReadConn) -> Session:
+        """The session of a browser request that only reads."""
+        sess = await current_session(conn, request)
+        if sess is None:
+            raise Refused(401, "signed_out")
+        return sess
+
+    async def require_write_session(request: Request, conn: WriteConn) -> Session:
+        """The session of a state-changing browser request: signed in, with its CSRF token, within the limit."""
+        sess = await current_session(conn, request)
+        if sess is None:
+            raise Refused(401, "signed_out")
+        check_csrf(request, sess)
+        if not write_limit.allow(sess.user_id):
+            raise Refused(429, "rate_limited")
+        return sess
+
+    async def signing_out(request: Request, conn: WriteConn) -> Session | None:
+        """The session a sign-out ends, CSRF-checked. None (signed out already) is fine; never limited."""
+        sess = await current_session(conn, request)
+        if sess is not None:
+            check_csrf(request, sess)
+        return sess
+
+    async def require_client(request: Request) -> Client:
+        """The backend making this request: within the limit, with good credentials."""
+        if not backend_limit.allow(ip_of(request)):
+            raise Refused(429, "rate_limited")
+        client = authenticate_client(request)
+        if client is None:
+            raise Refused(401, "invalid_client")
+        return client
+
+    ReadSession = Annotated[Session, Depends(require_session)]  # noqa: N806
+    WriteSession = Annotated[Session, Depends(require_write_session)]  # noqa: N806
+    Backend = Annotated[Client, Depends(require_client)]  # noqa: N806
+
     # ── routes ─────────────────────────────────────────────────────────────────
 
     @app.get("/healthz")
@@ -515,28 +604,22 @@ def create_app(
         return resp
 
     @app.get("/v1/me")
-    async def me(request: Request) -> Response:
-        async with db.connect() as conn:
-            sess = await current_session(conn, request)
-            if sess is None:
-                return _error(401, "signed_out")
-            user = (await conn.execute(select(users).where(users.c.id == sess.user_id))).one()
+    async def me(sess: ReadSession, conn: ReadConn) -> Response:
+        user = (await conn.execute(select(users).where(users.c.id == sess.user_id))).one()
         return JSONResponse({**_user_json(user), "csrf": sess.csrf, "expiresAt": sess.expires_at.isoformat()})
 
     @app.post("/v1/logout")
-    async def logout(request: Request) -> Response:
+    async def logout(
+        request: Request, sess: Annotated[Session | None, Depends(signing_out)], conn: WriteConn
+    ) -> Response:
         everywhere = request.query_params.get("everywhere") in ("1", "true")
-        async with db.begin() as conn:
-            sess = await current_session(conn, request)
-            if sess is not None:
-                if not secrets.compare_digest(request.headers.get(CSRF_HEADER, ""), sess.csrf):
-                    return _error(403, "csrf")
-                where = sessions.c.user_id == sess.user_id if everywhere else sessions.c.id == sess.id
-                await conn.execute(
-                    update(sessions).where(where, sessions.c.revoked_at.is_(None)).values(revoked_at=clock())
-                )
-                event = "signout.everywhere" if everywhere else "signout"
-                await record(conn, event, request, user_id=sess.user_id)
+        if sess is not None:
+            where = sessions.c.user_id == sess.user_id if everywhere else sessions.c.id == sess.id
+            await conn.execute(
+                update(sessions).where(where, sessions.c.revoked_at.is_(None)).values(revoked_at=clock())
+            )
+            event = "signout.everywhere" if everywhere else "signout"
+            await record(conn, event, request, user_id=sess.user_id)
         resp = Response(status_code=204)
         resp.delete_cookie(session_cookie, path="/", secure=secure, httponly=True, samesite="lax")
         return resp
@@ -594,76 +677,44 @@ def create_app(
             await conn.execute(select(progress).where(progress.c.user_id == user_id, progress.c.vod_id == vod_id))
         ).first()
 
+    # A limit or a body is declared before the session, so it is checked first.
+
     @app.get("/v1/progress")
-    async def progress_index(request: Request) -> Response:
-        try:
-            limit = min(max(int(request.query_params.get("limit", PROGRESS_MAX)), 1), PROGRESS_MAX)
-        except ValueError:
-            return _error(400, "invalid_limit")
-        async with db.connect() as conn:
-            sess = await current_session(conn, request)
-            if sess is None:
-                return _error(401, "signed_out")
-            return JSONResponse({"items": await progress_list(conn, sess.user_id, limit)})
+    async def progress_index(
+        limit: Annotated[int, Depends(progress_limit)], sess: ReadSession, conn: ReadConn
+    ) -> Response:
+        return JSONResponse({"items": await progress_list(conn, sess.user_id, limit)})
 
     @app.get("/v1/progress/{vod_id}")
-    async def progress_get(vod_id: str, request: Request) -> Response:
-        async with db.connect() as conn:
-            sess = await current_session(conn, request)
-            if sess is None:
-                return _error(401, "signed_out")
-            row = await progress_row(conn, sess.user_id, vod_id)
+    async def progress_get(vod_id: str, sess: ReadSession, conn: ReadConn) -> Response:
+        row = await progress_row(conn, sess.user_id, vod_id)
         return JSONResponse(_progress_json(row)) if row else _error(404, "not_found")
 
     @app.put("/v1/progress/{vod_id}")
-    async def progress_put(vod_id: str, request: Request) -> Response:
-        try:
-            body = ProgressIn.model_validate_json(await request.body())
-            item = ProgressItem(vodId=vod_id, **body.model_dump())
-        except ValidationError:
-            return _error(422, "invalid_progress")
-        async with db.begin() as conn:
-            sess = await session_for_write(conn, request)
-            if isinstance(sess, Response):
-                return sess
-            await upsert_progress(conn, sess.user_id, [item])
-            row = await progress_row(conn, sess.user_id, vod_id)
+    async def progress_put(
+        item: Annotated[ProgressItem, Depends(progress_item)], sess: WriteSession, conn: WriteConn
+    ) -> Response:
+        await upsert_progress(conn, sess.user_id, [item])
+        row = await progress_row(conn, sess.user_id, item.vodId)
         return JSONResponse(_progress_json(row)) if row else Response(status_code=204)
 
     @app.post("/v1/progress/merge")
-    async def progress_merge(request: Request) -> Response:
+    async def progress_merge(
+        body: Annotated[ProgressMerge, Depends(merge_body)], sess: WriteSession, conn: WriteConn
+    ) -> Response:
         """Many entries at once, newest winning each: a browser's local progress on its first sign-in."""
-        try:
-            body = ProgressMerge.model_validate_json(await request.body())
-        except ValidationError:
-            return _error(422, "invalid_progress")
-        async with db.begin() as conn:
-            sess = await session_for_write(conn, request)
-            if isinstance(sess, Response):
-                return sess
-            await upsert_progress(conn, sess.user_id, body.items)
-            return JSONResponse({"items": await progress_list(conn, sess.user_id, PROGRESS_MAX)})
+        await upsert_progress(conn, sess.user_id, body.items)
+        return JSONResponse({"items": await progress_list(conn, sess.user_id, PROGRESS_MAX)})
 
     @app.delete("/v1/progress/{vod_id}")
-    async def progress_delete(vod_id: str, request: Request) -> Response:
-        async with db.begin() as conn:
-            sess = await session_for_write(conn, request)
-            if isinstance(sess, Response):
-                return sess
-            await conn.execute(delete(progress).where(progress.c.user_id == sess.user_id, progress.c.vod_id == vod_id))
+    async def progress_delete(vod_id: str, sess: WriteSession, conn: WriteConn) -> Response:
+        await conn.execute(delete(progress).where(progress.c.user_id == sess.user_id, progress.c.vod_id == vod_id))
         return Response(status_code=204)
 
     # ── backends ───────────────────────────────────────────────────────────────
 
     @app.post("/v1/token")
-    async def token(request: Request) -> Response:
-        client = backend_client(request)
-        if isinstance(client, Response):
-            return client
-        try:
-            body = TokenIn.model_validate_json(await request.body())
-        except ValidationError:
-            return _error(400, "invalid_request")
+    async def token(request: Request, client: Backend, body: Annotated[TokenIn, Depends(token_body)]) -> Response:
         async with db.begin() as conn:
             now = clock()
             row = (
@@ -690,10 +741,7 @@ def create_app(
         )
 
     @app.get("/v1/sessions/{sid}")
-    async def session_status(sid: str, request: Request) -> Response:
-        client = backend_client(request)
-        if isinstance(client, Response):
-            return client
+    async def session_status(sid: str, client: Backend) -> Response:
         async with db.connect() as conn:
             if not await has_signed_into(conn, client, sid=sid):
                 return JSONResponse({"active": False}, status_code=404)
@@ -703,10 +751,7 @@ def create_app(
         return JSONResponse({"active": True, "user": _user_json(found), "expiresAt": found.expires_at.isoformat()})
 
     @app.get("/v1/users/{user_id}/moderated-channels")
-    async def moderated_channels(user_id: str, request: Request) -> Response:
-        client = backend_client(request)
-        if isinstance(client, Response):
-            return client
+    async def moderated_channels(user_id: str, request: Request, client: Backend) -> Response:
         if MODERATED_SCOPE not in client.scopes:
             return _error(403, "scope_not_allowed")
         async with db.connect() as conn:
