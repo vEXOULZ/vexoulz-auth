@@ -104,6 +104,7 @@ progress = Table(
     Column("duration", Float, nullable=False),
     Column("updated_at", BigInteger, nullable=False),  # epoch ms, as the browser saw it
     PrimaryKeyConstraint("user_id", "vod_id"),
+    Index("progress_user_updated", "user_id", "updated_at"),
 )
 
 audit = Table(
