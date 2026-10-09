@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from tests.conftest import BOB, Harness
-from vexoulz_auth.app import CSRF_HEADER
+from sqlalchemy import func, insert, select
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from tests.conftest import ALICE, BOB, Harness
+from vexoulz_auth.app import CSRF_HEADER, PROGRESS_MAX
+from vexoulz_auth.db import progress
 
 ENTRY = {"t": 1, "duration": 9, "updatedAt": 1}
 
@@ -70,3 +74,29 @@ async def test_bad_progress_is_refused(h: Harness) -> None:
     assert (await h.http.put("/v1/progress/bad%20id", headers=hd, json=ENTRY)).status_code == 422
     too_many = [{"vodId": f"v{i}", **ENTRY} for i in range(501)]
     assert (await h.http.post("/v1/progress/merge", headers=hd, json={"items": too_many})).status_code == 422
+
+
+async def test_only_a_new_entry_trims(h: Harness, engine: AsyncEngine) -> None:
+    await h.sign_in()
+    hd = await headers(h)
+    # One over the cap, put there behind the service's back, shows when it trims.
+    rows = [
+        {"user_id": ALICE.id, "vod_id": f"v{i}", "t": 0, "duration": 1, "updated_at": 1000 + i}
+        for i in range(PROGRESS_MAX + 1)
+    ]
+    async with engine.begin() as conn:
+        await conn.execute(insert(progress), rows)
+
+    async def count() -> int:
+        async with engine.connect() as conn:
+            return int(await conn.scalar(select(func.count()).select_from(progress)) or 0)
+
+    await h.http.put("/v1/progress/v5", headers=hd, json={"t": 1, "duration": 1, "updatedAt": 9000})  # an update
+    await h.http.put("/v1/progress/v6", headers=hd, json={"t": 1, "duration": 1, "updatedAt": 1})  # a stale one
+    await h.http.post("/v1/progress/merge", headers=hd, json={"items": [{"vodId": "v7", **ENTRY, "updatedAt": 9001}]})
+    assert await count() == PROGRESS_MAX + 1
+    await h.http.put("/v1/progress/new", headers=hd, json={"t": 1, "duration": 1, "updatedAt": 9002})  # an insert
+    assert await count() == PROGRESS_MAX
+    assert (await h.http.get("/v1/progress/v0")).status_code == 404  # the oldest went
+    assert (await h.http.get("/v1/progress/v1")).status_code == 404
+    assert (await h.http.get("/v1/progress/new")).status_code == 200

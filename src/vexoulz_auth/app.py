@@ -36,7 +36,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import Row, and_, delete, exists, insert, select, text, update
+from sqlalchemy import Result, Row, and_, delete, exists, insert, literal_column, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
@@ -643,7 +643,7 @@ def create_app(
                 for i in items
             ]
         )
-        await conn.execute(
+        written: Result[Any] = await conn.execute(
             stmt.on_conflict_do_update(
                 index_elements=[progress.c.user_id, progress.c.vod_id],
                 set_={
@@ -652,8 +652,10 @@ def create_app(
                     "updated_at": stmt.excluded.updated_at,
                 },
                 where=stmt.excluded.updated_at >= progress.c.updated_at,
-            )
+            ).returning(literal_column("xmax = 0").label("inserted"))  # Postgres: 0 for a new row
         )
+        if not any(r.inserted for r in written):
+            return  # only updates: the user has no more entries than before, so nothing to trim
         keep = (
             select(progress.c.vod_id)
             .where(progress.c.user_id == user_id)
