@@ -12,5 +12,5 @@ over Postgres, published as `ghcr.io/vexoulz/vexoulz-auth`; production follows `
   and up again. There is no alembic.ini: copy the newest file in `src/vexoulz_auth/migrations/versions/`.
 - Tests need Postgres at `TEST_DATABASE_URL` (see README "Developing"); they create and drop their own
   database.
-- A release tag `vX.Y.Z` must equal `version` in pyproject.toml; keep `__version__` in
-  `src/vexoulz_auth/__init__.py` in step with it.
+- A release tag `vX.Y.Z` must equal `version` in pyproject.toml (`__version__` reads it from the installed
+  package).
