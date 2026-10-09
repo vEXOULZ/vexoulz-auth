@@ -4,10 +4,12 @@ import base64
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from tests.conftest import ALICE, BOB, BOT_REDIRECT, SITE, VODS_REDIRECT, Clock, FakeTwitch, Harness, make_settings
 from vexoulz_auth.app import CSRF_HEADER, Limiter, create_app, with_query
+from vexoulz_auth.db import login_states
 
 MODERATED = "user:read:moderated_channels"
 
@@ -106,6 +108,23 @@ async def test_a_state_works_once_and_expires(h: Harness) -> None:
     params = await h.twitch_redirect(await h.http.get("/login", params={"return": SITE + "/x"}))
     h.clock.advance(minutes=11)
     assert (await h.approve(params, ALICE)).headers["location"] == SITE + "/x?auth_error=expired"
+
+
+async def test_expired_states_are_cleaned_up_at_most_every_interval(h: Harness, engine: AsyncEngine) -> None:
+    async def states() -> int:
+        async with engine.connect() as conn:
+            return int(await conn.scalar(select(func.count()).select_from(login_states)) or 0)
+
+    await h.http.get("/login", params={"return": SITE})  # cleans up (nothing yet), then stores its state
+    h.clock.advance(minutes=9)
+    await h.http.get("/login", params={"return": SITE})
+    h.clock.advance(minutes=2)  # the first state has expired, but the last cleanup was 11 minutes ago...
+    assert await states() == 2
+    await h.http.get("/login", params={"return": SITE})  # ...so this one cleans up
+    assert await states() == 2  # the first went, this one came
+    h.clock.advance(minutes=9)  # the second has expired too, within the interval: it stays
+    await h.http.get("/login", params={"return": SITE})
+    assert await states() == 3
 
 
 async def test_sessions_expire(h: Harness) -> None:
