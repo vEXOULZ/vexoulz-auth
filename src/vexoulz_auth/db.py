@@ -81,6 +81,7 @@ codes = Table(
     Column("used_at", DateTime(timezone=True)),
     Index("codes_client_session", "client_id", "session_id"),
     Index("codes_client_user", "client_id", "user_id"),
+    Index("codes_expires_at", "expires_at"),
 )
 
 login_states = Table(
@@ -93,6 +94,7 @@ login_states = Table(
     Column("client_state", Text),
     Column("scopes", ARRAY(Text), nullable=False),
     Column("expires_at", DateTime(timezone=True), nullable=False),
+    Index("login_states_expires_at", "expires_at"),
 )
 
 progress = Table(
