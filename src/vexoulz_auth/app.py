@@ -37,7 +37,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import and_, delete, func, insert, select, text, update
+from sqlalchemy import Row, and_, delete, exists, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
@@ -237,6 +237,23 @@ def create_app(
             return _error(429, "rate_limited")
         return sess
 
+    def backend_client(request: Request) -> Client | JSONResponse:
+        """The backend making this request, or the response refusing it (rate limited, or bad credentials)."""
+        if not backend_limit.allow(ip_of(request)):
+            return _error(429, "rate_limited")
+        client = authenticate_client(request)
+        return _error(401, "invalid_client") if client is None else client
+
+    async def live_session_user(conn: AsyncConnection, sid: str, now: datetime) -> Row[Any] | None:
+        """The user of session `sid` with its expiry, unless it was revoked or has expired."""
+        return (
+            await conn.execute(
+                select(users, sessions.c.expires_at)
+                .join(sessions, sessions.c.user_id == users.c.id)
+                .where(sessions.c.id == sid, sessions.c.revoked_at.is_(None), sessions.c.expires_at > now)
+            )
+        ).first()
+
     def authenticate_client(request: Request) -> Client | None:
         header = request.headers.get("authorization", "")
         scheme, _, value = header.partition(" ")
@@ -255,9 +272,7 @@ def create_app(
         """Whether the client was ever handed this session or user: a backend only asks about its own."""
         where = codes.c.session_id == sid if sid else codes.c.user_id == user_id
         found = await conn.scalar(
-            select(func.count())
-            .select_from(codes)
-            .where(and_(codes.c.client_id == client.id, codes.c.used_at.is_not(None), where))
+            select(exists().where(and_(codes.c.client_id == client.id, codes.c.used_at.is_not(None), where)))
         )
         return bool(found)
 
@@ -340,8 +355,7 @@ def create_app(
         )
         # A plain sign-in asks Twitch for no scope. Its token must not replace one that carries more, or
         # signing in on root would take away what the bot's admin needs.
-        held = await conn.scalar(select(twitch_tokens.c.scopes).where(twitch_tokens.c.user_id == profile.id))
-        if held is not None and not token.scopes >= set(held):
+        if not token.scopes >= await token_scopes(conn, profile.id):
             return
         stored = {
             "access_enc": fernet.encrypt(token.access.encode()),
@@ -573,6 +587,11 @@ def create_app(
         )
         return [_progress_json(r) for r in rows]
 
+    async def progress_row(conn: AsyncConnection, user_id: str, vod_id: str) -> Row[Any] | None:
+        return (
+            await conn.execute(select(progress).where(progress.c.user_id == user_id, progress.c.vod_id == vod_id))
+        ).first()
+
     @app.get("/v1/progress")
     async def progress_index(request: Request) -> Response:
         try:
@@ -591,11 +610,7 @@ def create_app(
             sess = await current_session(conn, request)
             if sess is None:
                 return _error(401, "signed_out")
-            row = (
-                await conn.execute(
-                    select(progress).where(progress.c.user_id == sess.user_id, progress.c.vod_id == vod_id)
-                )
-            ).first()
+            row = await progress_row(conn, sess.user_id, vod_id)
         return JSONResponse(_progress_json(row)) if row else _error(404, "not_found")
 
     @app.put("/v1/progress/{vod_id}")
@@ -610,11 +625,7 @@ def create_app(
             if isinstance(sess, Response):
                 return sess
             await upsert_progress(conn, sess.user_id, [item])
-            row = (
-                await conn.execute(
-                    select(progress).where(progress.c.user_id == sess.user_id, progress.c.vod_id == vod_id)
-                )
-            ).first()
+            row = await progress_row(conn, sess.user_id, vod_id)
         return JSONResponse(_progress_json(row)) if row else Response(status_code=204)
 
     @app.post("/v1/progress/merge")
@@ -644,11 +655,9 @@ def create_app(
 
     @app.post("/v1/token")
     async def token(request: Request) -> Response:
-        if not backend_limit.allow(ip_of(request)):
-            return _error(429, "rate_limited")
-        client = authenticate_client(request)
-        if client is None:
-            return _error(401, "invalid_client")
+        client = backend_client(request)
+        if isinstance(client, Response):
+            return client
         try:
             body = TokenIn.model_validate_json(await request.body())
         except ValidationError:
@@ -670,17 +679,7 @@ def create_app(
                 or row.expires_at <= now
             ):
                 return _error(400, "invalid_grant")
-            found = (
-                await conn.execute(
-                    select(users, sessions.c.expires_at)
-                    .join(sessions, sessions.c.user_id == users.c.id)
-                    .where(
-                        sessions.c.id == row.session_id,
-                        sessions.c.revoked_at.is_(None),
-                        sessions.c.expires_at > now,
-                    )
-                )
-            ).first()
+            found = await live_session_user(conn, row.session_id, now)
             if found is None:
                 return _error(400, "invalid_grant")
             await record(conn, "code.redeemed", request, user_id=row.user_id, client_id=client.id)
@@ -690,32 +689,22 @@ def create_app(
 
     @app.get("/v1/sessions/{sid}")
     async def session_status(sid: str, request: Request) -> Response:
-        if not backend_limit.allow(ip_of(request)):
-            return _error(429, "rate_limited")
-        client = authenticate_client(request)
-        if client is None:
-            return _error(401, "invalid_client")
+        client = backend_client(request)
+        if isinstance(client, Response):
+            return client
         async with db.connect() as conn:
             if not await has_signed_into(conn, client, sid=sid):
                 return JSONResponse({"active": False}, status_code=404)
-            found = (
-                await conn.execute(
-                    select(users, sessions.c.expires_at)
-                    .join(sessions, sessions.c.user_id == users.c.id)
-                    .where(sessions.c.id == sid, sessions.c.revoked_at.is_(None), sessions.c.expires_at > clock())
-                )
-            ).first()
+            found = await live_session_user(conn, sid, clock())
         if found is None:
             return JSONResponse({"active": False}, status_code=404)
         return JSONResponse({"active": True, "user": _user_json(found), "expiresAt": found.expires_at.isoformat()})
 
     @app.get("/v1/users/{user_id}/moderated-channels")
     async def moderated_channels(user_id: str, request: Request) -> Response:
-        if not backend_limit.allow(ip_of(request)):
-            return _error(429, "rate_limited")
-        client = authenticate_client(request)
-        if client is None:
-            return _error(401, "invalid_client")
+        client = backend_client(request)
+        if isinstance(client, Response):
+            return client
         if MODERATED_SCOPE not in client.scopes:
             return _error(403, "scope_not_allowed")
         async with db.connect() as conn:
