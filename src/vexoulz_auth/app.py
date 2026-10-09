@@ -604,9 +604,27 @@ def create_app(
         return resp
 
     @app.get("/v1/me")
-    async def me(sess: ReadSession, conn: ReadConn) -> Response:
-        user = (await conn.execute(select(users).where(users.c.id == sess.user_id))).one()
-        return JSONResponse({**_user_json(user), "csrf": sess.csrf, "expiresAt": sess.expires_at.isoformat()})
+    async def me(request: Request, conn: ReadConn) -> Response:
+        # require_session's lookup and the user in one query
+        token = request.cookies.get(session_cookie)
+        row = (
+            (
+                await conn.execute(
+                    select(users, sessions.c.csrf, sessions.c.expires_at)
+                    .join(sessions, sessions.c.user_id == users.c.id)
+                    .where(
+                        sessions.c.token_hash == _hash(token),
+                        sessions.c.revoked_at.is_(None),
+                        sessions.c.expires_at > clock(),
+                    )
+                )
+            ).first()
+            if token
+            else None
+        )
+        if row is None:
+            raise Refused(401, "signed_out")
+        return JSONResponse({**_user_json(row), "csrf": row.csrf, "expiresAt": row.expires_at.isoformat()})
 
     @app.post("/v1/logout")
     async def logout(

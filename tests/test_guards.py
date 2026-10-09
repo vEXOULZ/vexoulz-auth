@@ -13,7 +13,7 @@ import re
 from typing import Any
 
 import httpx
-from sqlalchemy import insert
+from sqlalchemy import event, insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from tests.conftest import ALICE, Harness
@@ -91,6 +91,21 @@ async def test_me(h: Harness) -> None:
     assert answer(await h.http.get("/v1/me")) == json_answer(200, js(body))
     h.clock.advance(days=31)
     assert answer(await h.http.get("/v1/me")) == error(401, "signed_out")
+
+
+async def test_me_is_one_query(h: Harness, engine: AsyncEngine) -> None:
+    await signed_in(h)
+    statements: list[str] = []
+
+    def record(*args: Any) -> None:
+        statements.append(args[2])
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        assert (await h.http.get("/v1/me")).status_code == 200
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+    assert len(statements) == 1
 
 
 # ── /v1/logout ───────────────────────────────────────────────────────────────
