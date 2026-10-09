@@ -626,9 +626,11 @@ def create_app(
 
     # ── progress ───────────────────────────────────────────────────────────────
 
-    async def upsert_progress(conn: AsyncConnection, user_id: str, items: list[ProgressItem]) -> None:
+    async def upsert_progress(conn: AsyncConnection, user_id: str, items: list[ProgressItem]) -> dict[str, Row[Any]]:
+        """Saves `items` and gives the rows it wrote, by vod id. An entry missing from the answer was older
+        than the one already saved, or was trimmed straight away."""
         if not items:
-            return
+            return {}
         # Newest wins, per entry: an older write (another tab, a merge of stale local data) never undoes
         # a newer one.
         stmt = pg_insert(progress).values(
@@ -643,7 +645,7 @@ def create_app(
                 for i in items
             ]
         )
-        written: Result[Any] = await conn.execute(
+        result: Result[Any] = await conn.execute(
             stmt.on_conflict_do_update(
                 index_elements=[progress.c.user_id, progress.c.vod_id],
                 set_={
@@ -652,19 +654,25 @@ def create_app(
                     "updated_at": stmt.excluded.updated_at,
                 },
                 where=stmt.excluded.updated_at >= progress.c.updated_at,
-            ).returning(literal_column("xmax = 0").label("inserted"))  # Postgres: 0 for a new row
+            ).returning(*progress.c, literal_column("xmax = 0").label("inserted"))  # Postgres: 0 for a new row
         )
-        if not any(r.inserted for r in written):
-            return  # only updates: the user has no more entries than before, so nothing to trim
+        written = {r.vod_id: r for r in result}
+        if not any(r.inserted for r in written.values()):
+            return written  # only updates: the user has no more entries than before, so nothing to trim
         keep = (
             select(progress.c.vod_id)
             .where(progress.c.user_id == user_id)
             .order_by(progress.c.updated_at.desc())
             .limit(PROGRESS_MAX)
         )
-        await conn.execute(
-            delete(progress).where(progress.c.user_id == user_id, progress.c.vod_id.not_in(keep.scalar_subquery()))
+        trimmed = await conn.scalars(
+            delete(progress)
+            .where(progress.c.user_id == user_id, progress.c.vod_id.not_in(keep.scalar_subquery()))
+            .returning(progress.c.vod_id)
         )
+        for vod_id in trimmed:
+            written.pop(vod_id, None)
+        return written
 
     async def progress_list(conn: AsyncConnection, user_id: str, limit: int) -> list[dict[str, Any]]:
         rows = await conn.execute(
@@ -694,8 +702,8 @@ def create_app(
     async def progress_put(
         item: Annotated[ProgressItem, Depends(progress_item)], sess: WriteSession, conn: WriteConn
     ) -> Response:
-        await upsert_progress(conn, sess.user_id, [item])
-        row = await progress_row(conn, sess.user_id, item.vodId)
+        written = await upsert_progress(conn, sess.user_id, [item])
+        row = written.get(item.vodId) or await progress_row(conn, sess.user_id, item.vodId)  # stale or trimmed
         return JSONResponse(_progress_json(row)) if row else Response(status_code=204)
 
     @app.post("/v1/progress/merge")
