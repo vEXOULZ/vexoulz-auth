@@ -59,6 +59,7 @@ CSRF_HEADER = "X-Vexoulz-CSRF"
 READY_TIMEOUT_S = 5  # /readyz: a database slower than this counts as down
 STATE_TTL = timedelta(minutes=10)
 CODE_TTL = timedelta(seconds=60)
+CLEANUP_INTERVAL = timedelta(minutes=10)  # expired states and codes go at most this often, per process
 MODERATED_SCOPE = "user:read:moderated_channels"
 PROGRESS_MAX = 5000  # per user; the oldest go first
 MERGE_MAX = 500  # entries in one merge
@@ -208,6 +209,7 @@ def create_app(
     login_limit = Limiter(20, 60)
     backend_limit = Limiter(120, 60)
     write_limit = Limiter(240, 60)
+    last_cleanup: datetime | None = None
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -318,9 +320,13 @@ def create_app(
         client_redirect_uri: str | None = None,
         client_state: str | None = None,
     ) -> Response:
+        nonlocal last_cleanup
         now = clock()
-        await conn.execute(delete(login_states).where(login_states.c.expires_at <= now))
-        await conn.execute(delete(codes).where(codes.c.expires_at <= now - timedelta(days=1)))
+        if last_cleanup is None or now - last_cleanup >= CLEANUP_INTERVAL:
+            # Only tidiness: /callback and /v1/token check expires_at themselves.
+            last_cleanup = now
+            await conn.execute(delete(login_states).where(login_states.c.expires_at <= now))
+            await conn.execute(delete(codes).where(codes.c.expires_at <= now - timedelta(days=1)))
         state = secrets.token_urlsafe(24)
         await conn.execute(
             insert(login_states).values(
