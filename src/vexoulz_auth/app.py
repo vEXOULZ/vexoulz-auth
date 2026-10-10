@@ -4,6 +4,7 @@ Browsers (the sites, from their own origins, with credentials):
   GET  /login?return=<site URL>   → Twitch → /callback → back to the site, signed in
   GET  /v1/me                     the signed-in user and their CSRF token, or 401
   POST /v1/logout[?everywhere=1]  ends this session, or every session of the user
+  POST /v1/codes {client_id}      a one-time code for that backend, without a redirect
   /v1/progress[/{vodId}]          watch progress (GET, PUT, DELETE; POST /v1/progress/merge imports many)
 
 Backends (registered clients, HTTP Basic with their id and secret):
@@ -118,6 +119,10 @@ class ProgressMerge(BaseModel):
     items: list[ProgressItem] = Field(max_length=MERGE_MAX)
 
 
+class CodeIn(BaseModel):
+    client_id: str = Field(max_length=200)
+
+
 class TokenIn(BaseModel):
     code: str = Field(max_length=200)
     redirect_uri: str = Field(max_length=2000)
@@ -154,6 +159,7 @@ def json_body[M: BaseModel](model: type[M], status: int, error: str) -> Callable
 progress_body = json_body(ProgressIn, 422, "invalid_progress")
 merge_body = json_body(ProgressMerge, 422, "invalid_progress")
 token_body = json_body(TokenIn, 400, "invalid_request")
+code_body = json_body(CodeIn, 400, "invalid_request")
 
 
 async def progress_item(vod_id: str, body: Annotated[ProgressIn, Depends(progress_body)]) -> ProgressItem:
@@ -487,6 +493,16 @@ def create_app(
             raise Refused(401, "invalid_client")
         return client
 
+    async def code_client(request: Request, body: Annotated[CodeIn, Depends(code_body)]) -> Client:
+        """The registered client a browser asks a code for (POST /v1/codes), within /authorize's limit.
+        Declared before the session guard, like /authorize checks the client before the session."""
+        client = clients.get(body.client_id)
+        if client is None:
+            raise Refused(400, "unknown_client")
+        if not login_limit.allow(ip_of(request)):
+            raise Refused(429, "rate_limited")
+        return client
+
     ReadSession = Annotated[Session, Depends(require_session)]  # noqa: N806
     WriteSession = Annotated[Session, Depends(require_write_session)]  # noqa: N806
     Backend = Annotated[Client, Depends(require_client)]  # noqa: N806
@@ -647,6 +663,24 @@ def create_app(
         resp = Response(status_code=204)
         resp.delete_cookie(session_cookie, path="/", secure=secure, httponly=True, samesite="lax")
         return resp
+
+    @app.post("/v1/codes")
+    async def mint_code(
+        request: Request,
+        client: Annotated[Client, Depends(code_client)],
+        sess: WriteSession,
+        conn: WriteConn,
+    ) -> Response:
+        """/authorize without the redirect: the signed-in browser gets a code to hand to the client's backend.
+
+        The code is the one /authorize mints, carrying the client's first registered redirect URI, which
+        the backend sends to /v1/token. Any script on a site origin can mint one, but that gives it nothing
+        it couldn't do already by calling that site's own backend same-origin."""
+        if not client.scopes <= await token_scopes(conn, sess.user_id):
+            return _error(409, "scope_missing")  # needs Twitch: the browser goes through /authorize
+        code = await issue_code(conn, client, client.default_redirect_uri, sess)
+        await record(conn, "code.issued", request, user_id=sess.user_id, client_id=client.id, via="fetch")
+        return JSONResponse({"code": code})
 
     # ── progress ───────────────────────────────────────────────────────────────
 
