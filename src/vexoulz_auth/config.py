@@ -30,6 +30,9 @@ class Client:
     secret: str
     redirect_uris: frozenset[str]
     scopes: frozenset[str]
+    # The first registered redirect URI. A code minted by `POST /v1/codes` carries it, since no redirect
+    # names one, and the backend sends it to `/v1/token` like any other.
+    default_redirect_uri: str
 
 
 def origin_of(url: str) -> str | None:
@@ -97,13 +100,15 @@ class Settings(BaseSettings):
             scopes = frozenset(entry.get("scopes") or ())
             if not scopes <= EXTRA_SCOPES:
                 raise ValueError(f"client {entry.get('id')!r} asks for scopes this service never grants")
-            if not entry.get("id") or not entry.get("secret") or not entry.get("redirect_uris"):
-                raise ValueError("every client needs an id, a secret and at least one redirect_uri")
+            uris = entry.get("redirect_uris")
+            if not entry.get("id") or not entry.get("secret") or not isinstance(uris, list) or not uris:
+                raise ValueError("every client needs an id, a secret and a list of at least one redirect_uri")
             out[entry["id"]] = Client(
                 id=entry["id"],
                 secret=entry["secret"],
-                redirect_uris=frozenset(entry["redirect_uris"]),
+                redirect_uris=frozenset(uris),
                 scopes=scopes,
+                default_redirect_uri=uris[0],
             )
         return out
 

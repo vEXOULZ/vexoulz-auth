@@ -20,6 +20,17 @@ one-time code, like any OAuth provider.
   and a session id, and checks the session is still alive with `GET /v1/sessions/{sid}`, which is how
   "sign out everywhere" reaches it. A client registered for `user:read:moderated_channels` can ask
   `GET /v1/users/{id}/moderated-channels`.
+- **Codes without a redirect:** a site whose backend needs to know who is signed in, from a `fetch`
+  with no page redirect, asks `POST /v1/codes {client_id}` (credentialed, with `X-Vexoulz-CSRF`) and
+  hands the code to its backend, which redeems it with `POST /v1/token` as usual. It is the same
+  one-time code `/authorize` mints (same TTL, one use, bound to the client), and a redeemed one counts
+  for `GET /v1/sessions/{sid}` the same way. Such a code carries the client's **first registered
+  redirect URI**, so the backend sends that URI to `/v1/token`. It shares `/authorize`'s rate limit. If
+  the client is registered for scopes the user's stored Twitch token lacks, the answer is 409
+  `scope_missing`, and the browser has to go through `/authorize` once.
+  Any script running on a configured site origin can mint a code for any registered client. That gives
+  it nothing new: such a script can already call that site's backend same-origin with the user's
+  cookies.
 - **Twitch tokens** are stored encrypted (`AUTH_TOKEN_KEY`). A plain sign-in never replaces a stored
   token that carries more scopes.
 - **Errors** come back to the site as `?auth_error=denied|expired|twitch`, and to a backend's redirect
@@ -29,6 +40,7 @@ one-time code, like any OAuth provider.
 |---|---|---|
 | `GET /v1/me` | sites | `{id, login, displayName, avatar, color, csrf, expiresAt}`, or 401 |
 | `POST /v1/logout[?everywhere=1]` | sites | ends this session or all of the user's; needs `X-Vexoulz-CSRF` |
+| `POST /v1/codes` | sites | `{client_id}` → `{code}` for that backend; 401 `signed_out`, 403 `csrf`, 409 `scope_missing`, 400 `unknown_client`, 429 `rate_limited` |
 | `GET /v1/progress[?limit=]` | sites | the user's progress, newest first |
 | `GET/PUT/DELETE /v1/progress/{vodId}` | sites | one entry; `PUT {t, duration, updatedAt}`, newest wins |
 | `POST /v1/progress/merge` | sites | `{items: [...]}`, newest wins per entry (a browser's local progress) |
