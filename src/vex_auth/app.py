@@ -41,10 +41,10 @@ from sqlalchemy import Result, Row, and_, delete, exists, insert, literal_column
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
-from vexoulz_auth import __version__
-from vexoulz_auth.config import EXTRA_SCOPES, Client, Settings, origin_of
-from vexoulz_auth.db import audit, codes, login_states, progress, sessions, twitch_tokens, users
-from vexoulz_auth.twitch import (
+from vex_auth import __version__
+from vex_auth.config import EXTRA_SCOPES, Client, Settings, origin_of
+from vex_auth.db import audit, codes, login_states, progress, sessions, twitch_tokens, users
+from vex_auth.twitch import (
     AUTHORIZE_URL,
     Profile,
     Token,
@@ -227,7 +227,7 @@ def create_app(
         if owns_engine:
             await db.dispose()
 
-    app = FastAPI(title="vexoulz-auth", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
+    app = FastAPI(title="vex-auth", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
 
     @app.exception_handler(Refused)
     async def refused(_: Request, exc: Refused) -> Response:
@@ -532,7 +532,7 @@ def create_app(
     async def login(request: Request) -> Response:
         return_to = request.query_params.get("return", "")
         if len(return_to) > 2000 or origin_of(return_to) not in settings.origins:
-            return PlainTextResponse("That return address is not one of the vexoulz sites.", status_code=400)
+            return PlainTextResponse("That return address is not one of the vexoul.net sites.", status_code=400)
         if not login_limit.allow(ip_of(request)):
             return PlainTextResponse("Too many sign-in attempts. Wait a minute.", status_code=429)
         async with db.begin() as conn:

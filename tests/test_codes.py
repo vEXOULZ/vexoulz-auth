@@ -7,7 +7,7 @@ from typing import Any
 from tests.conftest import ALICE, BOT_REDIRECT, SITE, VODS_REDIRECT, Harness, make_settings
 from tests.test_guards import answer, error
 from tests.test_signin import DTP, MODERATED, VODS, authorize, query
-from vexoulz_auth.app import CSRF_HEADER, LEGACY_CSRF_HEADER
+from vex_auth.app import CSRF_HEADER, LEGACY_CSRF_HEADER
 
 
 async def signed_in(h: Harness) -> dict[str, str]:
