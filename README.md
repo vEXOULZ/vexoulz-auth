@@ -21,7 +21,7 @@ one-time code, like any OAuth provider.
   "sign out everywhere" reaches it. A client registered for `user:read:moderated_channels` can ask
   `GET /v1/users/{id}/moderated-channels`.
 - **Codes without a redirect:** a site whose backend needs to know who is signed in, from a `fetch`
-  with no page redirect, asks `POST /v1/codes {client_id}` (credentialed, with `X-Vexoulz-CSRF`) and
+  with no page redirect, asks `POST /v1/codes {client_id}` (credentialed, with `X-Vex-CSRF`) and
   hands the code to its backend, which redeems it with `POST /v1/token` as usual. It is the same
   one-time code `/authorize` mints (same TTL, one use, bound to the client), and a redeemed one counts
   for `GET /v1/sessions/{sid}` the same way. Such a code carries the client's **first registered
@@ -39,7 +39,7 @@ one-time code, like any OAuth provider.
 | Endpoint | For | What |
 |---|---|---|
 | `GET /v1/me` | sites | `{id, login, displayName, avatar, color, csrf, expiresAt}`, or 401 |
-| `POST /v1/logout[?everywhere=1]` | sites | ends this session or all of the user's; needs `X-Vexoulz-CSRF` |
+| `POST /v1/logout[?everywhere=1]` | sites | ends this session or all of the user's; needs `X-Vex-CSRF` |
 | `POST /v1/codes` | sites | `{client_id}` → `{code}` for that backend; 401 `signed_out`, 403 `csrf`, 409 `scope_missing`, 400 `unknown_client`, 429 `rate_limited` |
 | `GET /v1/progress[?limit=]` | sites | the user's progress, newest first |
 | `GET/PUT/DELETE /v1/progress/{vodId}` | sites | one entry; `PUT {t, duration, updatedAt}`, newest wins |
@@ -47,7 +47,8 @@ one-time code, like any OAuth provider.
 | `GET /healthz` | ops | the process answers (liveness; the container's `HEALTHCHECK`), no dependency checks |
 | `GET /readyz` | ops | the database answers too, else 503 naming it. Point uptime monitors here |
 
-Writes need the `X-Vexoulz-CSRF` header with the `csrf` from `/v1/me`.
+Writes need the `X-Vex-CSRF` header with the `csrf` from `/v1/me`. The old name, `X-Vexoulz-CSRF`,
+is still accepted until every site's libraries send the new one.
 
 ## Running it
 

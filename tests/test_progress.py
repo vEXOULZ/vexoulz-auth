@@ -4,7 +4,7 @@ from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from tests.conftest import ALICE, BOB, Harness
-from vexoulz_auth.app import CSRF_HEADER, PROGRESS_MAX
+from vexoulz_auth.app import CSRF_HEADER, LEGACY_CSRF_HEADER, PROGRESS_MAX
 from vexoulz_auth.db import progress
 
 ENTRY = {"t": 1, "duration": 9, "updatedAt": 1}
@@ -64,6 +64,16 @@ async def test_writes_need_a_session_and_csrf(h: Harness) -> None:
     assert (await h.http.put("/v1/progress/v1", json=ENTRY)).status_code == 403
     assert (await h.http.delete("/v1/progress/v1", headers={CSRF_HEADER: "wrong"})).status_code == 403
     assert (await h.http.post("/v1/progress/merge", json={"items": []})).status_code == 403
+
+
+async def test_the_old_csrf_header_still_works(h: Harness) -> None:
+    # Sites keep sending X-Vexoulz-CSRF until their libraries move to X-Vex-CSRF.
+    await h.sign_in()
+    token = (await h.me()).json()["csrf"]
+    assert (await h.http.put("/v1/progress/v1", headers={LEGACY_CSRF_HEADER: token}, json=ENTRY)).status_code == 200
+    assert (await h.http.put("/v1/progress/v1", headers={LEGACY_CSRF_HEADER: "wrong"}, json=ENTRY)).status_code == 403
+    both = {CSRF_HEADER: token, LEGACY_CSRF_HEADER: token}
+    assert (await h.http.delete("/v1/progress/v1", headers=both)).status_code == 204
 
 
 async def test_bad_progress_is_refused(h: Harness) -> None:
