@@ -4,8 +4,8 @@ from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from tests.conftest import ALICE, BOB, Harness
-from vexoulz_auth.app import CSRF_HEADER, LEGACY_CSRF_HEADER, PROGRESS_MAX
-from vexoulz_auth.db import progress
+from vex_auth.app import CSRF_HEADER, LEGACY_CSRF_HEADER, PROGRESS_MAX
+from vex_auth.db import progress
 
 ENTRY = {"t": 1, "duration": 9, "updatedAt": 1}
 
