@@ -5,14 +5,14 @@ services:
   db:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: vexoulz_auth
+      POSTGRES_USER: vex_auth
       POSTGRES_PASSWORD_FILE: /run/secrets/auth_db_password
-      POSTGRES_DB: vexoulz_auth
+      POSTGRES_DB: vex_auth
     secrets: [auth_db_password]
     volumes:
       - db:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vexoulz_auth"]
+      test: ["CMD-SHELL", "pg_isready -U vex_auth"]
       interval: 5s
       retries: 10
     restart: unless-stopped
