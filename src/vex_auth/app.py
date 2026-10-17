@@ -57,8 +57,6 @@ from vex_auth.twitch import (
 log = structlog.get_logger(__name__)
 
 CSRF_HEADER = "X-Vex-CSRF"
-# The header's name before the vexouLuna rename. Accepted until the libraries all send CSRF_HEADER.
-LEGACY_CSRF_HEADER = "X-Vexoulz-CSRF"
 READY_TIMEOUT_S = 5  # /readyz: a database slower than this counts as down
 STATE_TTL = timedelta(minutes=10)
 CODE_TTL = timedelta(seconds=60)
@@ -242,7 +240,7 @@ def create_app(
         allow_origins=sorted(settings.origins),
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE"],
-        allow_headers=["Content-Type", CSRF_HEADER, LEGACY_CSRF_HEADER],
+        allow_headers=["Content-Type", CSRF_HEADER],
         max_age=600,
     )
 
@@ -459,7 +457,7 @@ def create_app(
     WriteConn = Annotated[AsyncConnection, Depends(writing, scope="function")]  # noqa: N806
 
     def check_csrf(request: Request, sess: Session) -> None:
-        sent = request.headers.get(CSRF_HEADER) or request.headers.get(LEGACY_CSRF_HEADER, "")
+        sent = request.headers.get(CSRF_HEADER, "")
         if not secrets.compare_digest(sent, sess.csrf):
             raise Refused(403, "csrf")
 
@@ -871,4 +869,4 @@ def create_app(
     return app
 
 
-__all__ = ["CSRF_HEADER", "EXTRA_SCOPES", "LEGACY_CSRF_HEADER", "Limiter", "create_app", "with_query"]
+__all__ = ["CSRF_HEADER", "EXTRA_SCOPES", "Limiter", "create_app", "with_query"]

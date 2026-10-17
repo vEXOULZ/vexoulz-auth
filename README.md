@@ -47,8 +47,7 @@ one-time code, like any OAuth provider.
 | `GET /healthz` | ops | the process answers (liveness; the container's `HEALTHCHECK`), no dependency checks |
 | `GET /readyz` | ops | the database answers too, else 503 naming it. Point uptime monitors here |
 
-Writes need the `X-Vex-CSRF` header with the `csrf` from `/v1/me`. The old name, `X-Vexoulz-CSRF`,
-is still accepted until every site's libraries send the new one.
+Writes need the `X-Vex-CSRF` header with the `csrf` from `/v1/me`.
 
 ## Running it
 
