@@ -1,6 +1,6 @@
 [project]
 name = "vex-auth"
-version = "0.4.0"
+version = "0.5.0"
 description = "One Twitch sign-in for every vexoul.net site, and the per-user data behind it (watch progress)"
 readme = "README.md"
 license = "MIT"
